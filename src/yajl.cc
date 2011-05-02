@@ -32,6 +32,7 @@
 
 #include "handle.h"
 #include "tree.h"
+#include "stream.h"
 
 extern "C" {
     void
@@ -40,6 +41,7 @@ extern "C" {
         v8::HandleScope scope;
         yajljs::Handle::Initialize(target);
         yajljs::Tree::Initialize(target);
+        yajljs::Stream::Initialize(target);
     }
 
     NODE_MODULE(yajl, init);
