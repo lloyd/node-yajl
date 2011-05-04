@@ -13,8 +13,9 @@
 #include <node.h>
 #include <node/node_events.h>
 #include <yajl/yajl_parse.h>
-
 #include <stack>
+#include <string>
+#include "jsonwrap.h"
 
 namespace yajljs
 {
@@ -36,10 +37,9 @@ namespace yajljs
         void Update(const unsigned char*, int);
         v8::Handle<v8::Value> Complete();
         yajl_handle yhand;
-        std::stack< v8::Handle<v8::Value> > tokstack;
-        char * lastkey;
-        v8::Persistent<v8::Value> topval;
-        
+        std::stack< internal::JSONValue * > tokstack;
+        internal::JSONValue * topval;
+
         static int yajljs_null(void * ctx);
         static int yajljs_boolean(void * ctx, int boolean);
         static int yajljs_integer(void * ctx, long long int i);

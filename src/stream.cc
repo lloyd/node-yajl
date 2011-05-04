@@ -12,30 +12,32 @@
 #include <yajl/yajl_parse.h>
 
 #include "stream.h"
+#include <stdlib.h>
+#include <string.h>
+#include <string>
+
+#include "jsonwrap.h"
 
 using namespace v8;
 using namespace node;
+using namespace yajljs::internal;
 
-#define PUSHTOK(s, tok)                                         \
-    if ((s)->tokstack.size() == 0) {                            \
-        (s)->topval = Persistent<Value>::New(tok);              \
-    } else if ((s)->tokstack.top()->IsArray()) {                \
-        Local<Array> a = Array::Cast(*((s)->tokstack.top()));   \
-        a->Set(a->Length(), (tok));                             \
-    } else if (s->tokstack.top()->IsObject()) {                 \
-        Local<Object> o = Object::Cast(*((s)->tokstack.top())); \
-        /*  this needs to be twice as fast.  hmm. */            \
-        o->ForceSet(String::New((s)->lastkey), (tok));          \
-        free((s)->lastkey);                                     \
-        (s)->lastkey = NULL;                                    \
+#define PUSHTOK(s, val)                                         \
+    if ((s)->topval == NULL) {                                  \
+        (s)->topval = val;                                      \
+    } else if ((s)->tokstack.top()->v.type == yajl_t_array) {   \
+        arrayAdd((s)->tokstack.top(), (val));                   \
+    } else if ((s)->tokstack.top()->v.type == yajl_t_object) {  \
+        mapAddValue((s)->tokstack.top(), (val));                \
     }
-
 
 int
 yajljs::Stream::yajljs_null(void * ctx)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    PUSHTOK(s, Null());
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_null;
+    PUSHTOK(s, v);
     return 1;
 }
 
@@ -43,7 +45,9 @@ int
 yajljs::Stream::yajljs_boolean(void * ctx, int boolean)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    PUSHTOK(s, boolean ? True() : False());
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = boolean ? yajl_t_true : yajl_t_false;
+    PUSHTOK(s, v);
     return 1;
 }
 
@@ -51,14 +55,22 @@ yajljs::Stream::yajljs_boolean(void * ctx, int boolean)
 int yajljs::Stream::yajljs_integer(void * ctx, long long i)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    PUSHTOK(s, Integer::New(i));
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_number;
+    v->v.u.number.flags = YAJL_NUMBER_INT_VALID;
+    v->v.u.number.i = i;
+    PUSHTOK(s, v);
     return 1;
 }
 
 int yajljs::Stream::yajljs_double(void * ctx, double d)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    PUSHTOK(s, Number::New(d));
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_number;
+    v->v.u.number.flags = YAJL_NUMBER_DOUBLE_VALID;
+    v->v.u.number.d = d;
+    PUSHTOK(s, v);
     return 1;
 }
 
@@ -66,7 +78,10 @@ int yajljs::Stream::yajljs_string(void * ctx, const unsigned char * stringVal,
                                   size_t stringLen)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    PUSHTOK(s, String::New((const char *) stringVal, stringLen));
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_string;
+    v->v.u.string = strndup((char *) stringVal, stringLen);
+    PUSHTOK(s, v);
     return 1;
 }
 
@@ -74,48 +89,48 @@ int yajljs::Stream::yajljs_map_key(void * ctx, const unsigned char * stringVal,
                                    size_t stringLen)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    s->lastkey = (char *) malloc(stringLen + 1);
-    memcpy((void *) (s->lastkey), (void *) stringVal, stringLen);
-    s->lastkey[stringLen] = 0;
+    mapAddKey((s)->tokstack.top(), (char *) stringVal, stringLen);
     return 1;
 }
 
 int yajljs::Stream::yajljs_start_map(void * ctx)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    Local<Value> v = Object::New();
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_object;
     PUSHTOK(s, v);
-    s->tokstack.push(v);
+    (s)->tokstack.push(v);
     return 1;
 }
 
 int yajljs::Stream::yajljs_end_map(void * ctx)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    s->tokstack.pop();
+    (s)->tokstack.pop();
     return 1;
 }
 
 int yajljs::Stream::yajljs_start_array(void * ctx)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    Local<Value> v = Array::New(4);
+    JSONValue * v = (JSONValue *) calloc(1, sizeof(struct JSONValue));
+    v->v.type = yajl_t_array;
     PUSHTOK(s, v);
-    s->tokstack.push(v);
+    (s)->tokstack.push(v);
     return 1;
 }
 
 int yajljs::Stream::yajljs_end_array(void * ctx)
 {
     yajljs::Stream * s = (yajljs::Stream *) ctx;
-    s->tokstack.pop();
+    (s)->tokstack.pop();
     return 1;
 }
 
 void yajljs::Stream::Initialize ( v8::Handle<v8::Object> target )
 {
     v8::HandleScope scope;
-    
+
     v8::Local<v8::FunctionTemplate> t = v8::FunctionTemplate::New(New);
     t->InstanceTemplate()->SetInternalFieldCount(1);
     t->SetClassName(String::NewSymbol("Stream"));
@@ -136,17 +151,16 @@ v8::Handle<v8::Value> yajljs::Stream::New (const v8::Arguments& args)
     if( args.Length() >= 1 && args[0]->IsObject() )
     {
         Local<Object> obj = args[0]->ToObject();
-        
+
         opt |= ( obj->Get( String::New( "allowComments" ) )->ToInteger()->Value()       ) ? yajl_allow_comments         : 0;
         opt |= ( obj->Get( String::New( "dontValidateStrings" ) )->ToInteger()->Value() ) ? yajl_dont_validate_strings  : 0;
         opt |= ( obj->Get( String::New( "allowTrailingGarbage" ) )->ToInteger()->Value()) ? yajl_allow_trailing_garbage : 0;
         opt |= ( obj->Get( String::New( "allowMultipleValues" ) )->ToInteger()->Value() ) ? yajl_allow_multiple_values  : 0;
         opt |= ( obj->Get( String::New( "allowPartialValues" ) )->ToInteger()->Value()  ) ? yajl_allow_partial_values   : 0;
     }
-    
+
     yajljs::Stream *handle = new yajljs::Stream((yajl_option) opt);
     handle->Wrap( args.This() );
-    
     return args.This();
 }
 
@@ -172,6 +186,8 @@ yajljs::Stream::Stream( yajl_option opt )
     yajl_config( yhand, yajl_allow_trailing_garbage, opt & yajl_allow_trailing_garbage);
     yajl_config( yhand, yajl_allow_multiple_values, opt & yajl_allow_multiple_values);
     yajl_config( yhand, yajl_allow_partial_values, opt & yajl_allow_partial_values);
+
+    topval = NULL;
 }
 
 yajljs::Stream::~Stream()
@@ -194,8 +210,6 @@ yajljs::Stream::Update(const unsigned char * str, int len)
 v8::Handle<Value>
 yajljs::Stream::Complete( void )
 {
-    HandleScope scope;
-
     yajl_status s = yajl_complete_parse(yhand);
     if (s != yajl_status_ok) {
         ThrowException(
@@ -203,10 +217,10 @@ yajljs::Stream::Complete( void )
                 String::New((const char *) yajl_get_error(yhand, 0, NULL, 0))));
     }
 
-    return Null();
-    
-    Local<Value> v(*topval);
-    topval.Dispose();
+    if (topval == NULL) return Handle<Value>();
+    Handle<Value> v(getHandle(topval));
+    freeVal(topval);
+    topval = NULL;
     return v;
 }
 
@@ -230,7 +244,7 @@ yajljs::Stream::Update( const Arguments& args )
         }
     }
 
-    return Null();
+    return v8::Handle<Value>();
 }
 
 v8::Handle<Value>
@@ -243,6 +257,6 @@ yajljs::Stream::Complete( const Arguments& args )
 v8::Handle<Value>
 yajljs::Stream::Reset( const Arguments& args )
 {
-    return Null();
+    return v8::Handle<Value>();
 }
 
